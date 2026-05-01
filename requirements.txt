@@ -1,6 +1,4 @@
 fastapi
-uvicorn[standard]
-aiohttp
-redis
-supabase
-pydantic
+   uvicorn
+   aiohttp
+   pydantic
