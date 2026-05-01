@@ -1,11 +1,14 @@
 """
 IndexForce — single-file Python backend.
 Runs on Railway: FastAPI HTTP server (/api/submit, /api/status/{job_id})
-+ async queue worker loop. One process, zero extra services beyond Redis + Supabase.
++ async queue worker loop. One process, zero external services.
 
-Deploy: railway up (root dir = wherever this file lives)
-Env vars: UPSTASH_REDIS_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY,
-          INDEXNOW_KEY, INDEXNOW_HOST, PORT (Railway sets this automatically)
+No Redis. No Supabase. In-memory job store. Deploy and go.
+
+Env vars (all optional):
+  INDEXNOW_KEY   — your IndexNow key (auto-generated if omitted)
+  INDEXNOW_HOST  — your domain (defaults to placeholder)
+  PORT           — set automatically by Railway
 """
 
 # ─── stdlib ───────────────────────────────────────────────────────────────────
@@ -16,38 +19,38 @@ import logging
 import os
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 
 # ─── third-party ──────────────────────────────────────────────────────────────
 import aiohttp
-import redis as redis_sync
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from supabase import create_client, Client as SupabaseClient
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-REDIS_URL        = os.environ["UPSTASH_REDIS_URL"]
-SUPABASE_URL     = os.environ["SUPABASE_URL"]
-SUPABASE_KEY     = os.environ["SUPABASE_SERVICE_KEY"]
 INDEXNOW_KEY     = os.environ.get("INDEXNOW_KEY", uuid.uuid4().hex)
-INDEXNOW_HOST    = os.environ.get("INDEXNOW_HOST", "indexer.yourdomain.com")
-QUEUE_KEY        = "indexing_jobs"
+INDEXNOW_HOST    = os.environ.get("INDEXNOW_HOST", "indexer.example.com")
 CONCURRENT_PINGS = 80
 PING_TIMEOUT_SEC = 7
 MAX_URLS_FREE    = 50
 MAX_URLS_PRO     = 5000
 
+# ─── In-memory store ──────────────────────────────────────────────────────────
+# job_id -> dict with all job data
+JOBS: Dict[str, Dict[str, Any]] = {}
+# queue of job_ids waiting to be processed
+JOB_QUEUE: deque = deque()
+
 # ═════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — PING ENDPOINTS
-# 200+ verified XML-RPC + IndexNow endpoints
 # ═════════════════════════════════════════════════════════════════════════════
 
 XMLRPC_ENDPOINTS = [
@@ -109,7 +112,6 @@ XMLRPC_ENDPOINTS = [
     "http://www.syndic8.com/xmlrpc.php",
     "http://www.topicexchange.com/RPC2",
     "http://www.twingly.com/ping",
-    "http://xmlrpc.blogg.de/",
     "http://xping.pubsub.com/ping/",
     "http://ping.blogsearchengine.org/",
     "http://ping.blogmura.jp/rpc/",
@@ -322,7 +324,7 @@ async def submit_indexnow(urls: List[str]) -> Dict[str, Any]:
                         timeout=aiohttp.ClientTimeout(total=15),
                     ) as resp:
                         results.append({"engine": ep, "status": resp.status, "ok": resp.status in (200, 202)})
-                except Exception as e:
+                except Exception:
                     results.append({"engine": ep, "status": 0, "ok": False})
     ok = sum(1 for r in results if r.get("ok"))
     return {"indexnow_submissions": len(results), "indexnow_ok": ok, "engines_hit": [r["engine"] for r in results if r.get("ok")]}
@@ -439,7 +441,7 @@ async def verify_indexation(urls: List[str]) -> Dict[str, Any]:
 
 async def run_full_indexing_job(urls: List[str], job_id: str) -> Dict[str, Any]:
     log.info("[%s] Starting full indexing for %d URLs", job_id, len(urls))
-    feed_url = f"https://{INDEXNOW_HOST}/feed/{job_id}.xml"
+    feed_url    = f"https://{INDEXNOW_HOST}/feed/{job_id}.xml"
     sitemap_url = f"https://{INDEXNOW_HOST}/sitemap/{job_id}.xml"
 
     ping_result     = await mass_ping(urls)
@@ -464,28 +466,15 @@ async def run_full_indexing_job(urls: List[str], job_id: str) -> Dict[str, Any]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — DB HELPERS
+# SECTION 3 — URL PARSING
 # ═════════════════════════════════════════════════════════════════════════════
-
-def get_supabase() -> SupabaseClient:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
-def get_redis() -> redis_sync.Redis:
-    return redis_sync.from_url(REDIS_URL, decode_responses=True, socket_timeout=10)
-
-
-def update_job(sb: SupabaseClient, job_id: str, data: dict):
-    sb.table("indexing_jobs").update(data).eq("id", job_id).execute()
-
 
 def parse_urls(raw: str) -> List[str]:
     urls = []
     for token in raw.replace(",", "\n").split():
         t = token.strip()
         try:
-            from urllib.parse import urlparse as _up
-            r = _up(t)
+            r = urlparse(t)
             if r.scheme in ("http", "https") and r.netloc:
                 urls.append(t)
         except Exception:
@@ -494,91 +483,81 @@ def parse_urls(raw: str) -> List[str]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SECTION 4 — WORKER LOOP
+# SECTION 4 — WORKER LOOP (in-memory queue)
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def process_job(raw: str, sb: SupabaseClient):
-    try:
-        job = json.loads(raw)
-    except json.JSONDecodeError:
-        log.error("Invalid job JSON: %s", raw[:120])
+async def process_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        log.error("Job %s not found in memory", job_id)
         return
 
-    job_id  = job.get("job_id", str(uuid.uuid4()))
     urls    = job.get("urls", [])
     user_id = job.get("user_id", "anonymous")
 
     if not urls:
         log.warning("[%s] Empty URL list — skipping", job_id)
+        JOBS[job_id]["status"] = "failed"
+        JOBS[job_id]["error"]  = "No URLs provided"
         return
 
     log.info("[%s] Processing %d URLs for %s", job_id, len(urls), user_id)
-    update_job(sb, job_id, {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()})
+    JOBS[job_id]["status"]     = "running"
+    JOBS[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
         report = await run_full_indexing_job(urls=urls, job_id=job_id)
         assets = report.pop("generated_assets", {})
-        update_job(sb, job_id, {
-            "status": "complete",
+        layers = report["layers"]
+
+        JOBS[job_id].update({
+            "status":      "complete",
             "finished_at": datetime.now(timezone.utc).isoformat(),
-            "report": json.dumps(report),
-            "rss_feed": assets.get("rss_feed", ""),
+            "report":      report,
+            "rss_feed":    assets.get("rss_feed", ""),
             "sitemap_xml": assets.get("sitemap", ""),
-            "pings_fired": report["layers"]["xmlrpc_ping"]["pings_fired"],
-            "pings_ok": report["layers"]["xmlrpc_ping"]["pings_ok"],
-            "indexnow_ok": report["layers"]["indexnow"]["indexnow_ok"],
+            "pings_fired": layers["xmlrpc_ping"]["pings_fired"],
+            "pings_ok":    layers["xmlrpc_ping"]["pings_ok"],
+            "indexnow_ok": layers["indexnow"]["indexnow_ok"],
         })
-        sb.table("verify_queue").insert({
-            "job_id": job_id,
-            "urls": json.dumps(urls[:50]),
-            "check_after": datetime.fromtimestamp(time.time() + 86400, tz=timezone.utc).isoformat(),
-            "status": "pending",
-        }).execute()
+
+        # schedule verification after 24h (non-blocking)
+        asyncio.create_task(schedule_verify(job_id, urls[:50]))
+
         log.info("[%s] Complete. %s pings OK, IndexNow: %s engines",
-                 job_id, report["layers"]["xmlrpc_ping"]["pings_ok"], report["layers"]["indexnow"]["indexnow_ok"])
+                 job_id, layers["xmlrpc_ping"]["pings_ok"], layers["indexnow"]["indexnow_ok"])
     except Exception as exc:
         log.exception("[%s] Job failed: %s", job_id, exc)
-        update_job(sb, job_id, {
-            "status": "failed",
+        JOBS[job_id].update({
+            "status":      "failed",
             "finished_at": datetime.now(timezone.utc).isoformat(),
-            "error": str(exc)[:500],
+            "error":       str(exc)[:500],
         })
 
 
-async def run_verify_pass(sb: SupabaseClient):
-    now = datetime.now(timezone.utc).isoformat()
-    result = sb.table("verify_queue").select("*").eq("status", "pending").lte("check_after", now).limit(10).execute()
-    for row in result.data or []:
-        urls = json.loads(row["urls"])
-        log.info("[%s] Running verification for %d URLs", row["job_id"], len(urls))
-        try:
-            vr = await verify_indexation(urls)
-            sb.table("verify_queue").update({"status": "done", "result": json.dumps(vr)}).eq("id", row["id"]).execute()
-            sb.table("indexing_jobs").update({"verify_result": json.dumps(vr), "index_rate": vr["index_rate"]}).eq("id", row["job_id"]).execute()
-            log.info("[%s] Verified: %s indexed", row["job_id"], vr["index_rate"])
-        except Exception as e:
-            log.error("[%s] Verify failed: %s", row["job_id"], e)
+async def schedule_verify(job_id: str, urls: List[str]):
+    """Wait 24h then run indexation verification in background."""
+    await asyncio.sleep(86400)
+    if job_id not in JOBS:
+        return
+    try:
+        vr = await verify_indexation(urls)
+        JOBS[job_id]["verify_result"] = vr
+        JOBS[job_id]["index_rate"]    = vr["index_rate"]
+        log.info("[%s] Verified: %s indexed", job_id, vr["index_rate"])
+    except Exception as e:
+        log.error("[%s] Verify failed: %s", job_id, e)
 
 
 async def worker_loop():
-    log.info("Worker started — listening on queue: %s", QUEUE_KEY)
-    r  = get_redis()
-    sb = get_supabase()
-    verify_tick = 0
+    log.info("Worker started — polling in-memory queue")
     while True:
         try:
-            item = r.brpop(QUEUE_KEY, timeout=5)
-            if item:
-                _, raw = item
-                await process_job(raw, sb)
-            verify_tick += 1
-            if verify_tick >= 60:
-                verify_tick = 0
-                await run_verify_pass(sb)
-        except redis_sync.exceptions.ConnectionError as e:
-            log.error("Redis lost: %s — retrying", e)
-            await asyncio.sleep(5)
-            r = get_redis()
+            if JOB_QUEUE:
+                job_id = JOB_QUEUE.popleft()
+                await process_job(job_id)
+            else:
+                await asyncio.sleep(1)
         except Exception as e:
             log.exception("Worker error: %s", e)
             await asyncio.sleep(2)
@@ -586,13 +565,10 @@ async def worker_loop():
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SECTION 5 — FASTAPI HTTP SERVER
-# Serves /api/submit and /api/status/{job_id}
-# frontend (index.html) calls these directly via WORKER_URL env var
 # ═════════════════════════════════════════════════════════════════════════════
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the worker loop as a background task alongside the API server
     task = asyncio.create_task(worker_loop())
     yield
     task.cancel()
@@ -605,7 +581,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten to your Vercel domain in production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -613,8 +589,8 @@ app.add_middleware(
 
 class SubmitRequest(BaseModel):
     raw_urls: str
-    user_id: str = "anonymous"
-    plan: str = "free"
+    user_id:  str = "anonymous"
+    plan:     str = "free"
 
 
 @app.post("/api/submit")
@@ -626,66 +602,59 @@ async def api_submit(body: SubmitRequest):
     limit  = MAX_URLS_PRO if body.plan == "pro" else MAX_URLS_FREE
     sliced = urls[:limit]
     job_id = str(uuid.uuid4())
-    sb     = get_supabase()
-    r      = get_redis()
 
-    res = sb.table("indexing_jobs").insert({
-        "id": job_id,
-        "user_id": body.user_id,
-        "plan": body.plan,
-        "status": "queued",
-        "urls": json.dumps(sliced),
-        "url_count": len(sliced),
-        "queued_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
-
-    if hasattr(res, "error") and res.error:
-        raise HTTPException(status_code=500, detail="Database error")
-
-    r.lpush(QUEUE_KEY, json.dumps({"job_id": job_id, "urls": sliced, "user_id": body.user_id, "plan": body.plan}))
+    JOBS[job_id] = {
+        "id":         job_id,
+        "user_id":    body.user_id,
+        "plan":       body.plan,
+        "status":     "queued",
+        "urls":       sliced,
+        "url_count":  len(sliced),
+        "queued_at":  datetime.now(timezone.utc).isoformat(),
+        "started_at": None,
+        "finished_at":None,
+        "error":      None,
+        "pings_fired":None,
+        "pings_ok":   None,
+        "indexnow_ok":None,
+        "index_rate": None,
+        "verify_result": None,
+    }
+    JOB_QUEUE.append(job_id)
 
     return {
-        "success": True,
-        "job_id": job_id,
-        "urls_queued": len(sliced),
+        "success":      True,
+        "job_id":       job_id,
+        "urls_queued":  len(sliced),
         "urls_skipped": len(urls) - len(sliced),
-        "message": f"Job queued. {len(sliced)} URLs across 4 indexing layers.",
-        "status_url": f"/api/status/{job_id}",
+        "message":      f"Job queued. {len(sliced)} URLs across 4 indexing layers.",
+        "status_url":   f"/api/status/{job_id}",
     }
 
 
 @app.get("/api/status/{job_id}")
 async def api_status(job_id: str):
-    sb  = get_supabase()
-    res = sb.table("indexing_jobs").select("*").eq("id", job_id).single().execute()
-
-    if not res.data:
+    row = JOBS.get(job_id)
+    if not row:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    row = res.data
-    out = {
-        "job_id": row["id"],
-        "status": row["status"],
-        "url_count": row["url_count"],
-        "queued_at": row["queued_at"],
-        "started_at": row.get("started_at"),
+    out: Dict[str, Any] = {
+        "job_id":      row["id"],
+        "status":      row["status"],
+        "url_count":   row["url_count"],
+        "queued_at":   row["queued_at"],
+        "started_at":  row.get("started_at"),
         "finished_at": row.get("finished_at"),
-        "error": row.get("error"),
+        "error":       row.get("error"),
     }
 
-    if row.get("pings_fired"):
-        verify_result = None
-        if row.get("verify_result"):
-            try:
-                verify_result = json.loads(row["verify_result"])
-            except Exception:
-                pass
+    if row.get("pings_fired") is not None:
         out["results"] = {
-            "pings_fired": row["pings_fired"],
-            "pings_ok": row["pings_ok"],
-            "indexnow_ok": row["indexnow_ok"],
-            "index_rate": row.get("index_rate", "Pending…"),
-            "verify_result": verify_result,
+            "pings_fired":   row["pings_fired"],
+            "pings_ok":      row["pings_ok"],
+            "indexnow_ok":   row["indexnow_ok"],
+            "index_rate":    row.get("index_rate", "Pending…"),
+            "verify_result": row.get("verify_result"),
         }
 
     return out
@@ -693,7 +662,7 @@ async def api_status(job_id: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "jobs_in_memory": len(JOBS), "queue_depth": len(JOB_QUEUE)}
 
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
