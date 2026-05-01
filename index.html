@@ -1,0 +1,504 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>IndexForce — Force Google to Index Your URLs</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0a0f;color:#f9fafb;font-family:'Inter',sans-serif;min-height:100vh}
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes glow{0%,100%{box-shadow:0 0 8px #6366f180}50%{box-shadow:0 0 20px #6366f1cc}}
+  .header{position:sticky;top:0;z-index:100;border-bottom:1px solid rgba(255,255,255,.06);
+    padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between;
+    background:rgba(10,10,15,.85);backdrop-filter:blur(12px)}
+  .logo{display:flex;align-items:center;gap:10px}
+  .logo-icon{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);
+    display:flex;align-items:center;justify-content:center;font-size:17px}
+  .logo-name{font-size:18px;font-weight:800;letter-spacing:-.03em}
+  .badge{font-size:11px;font-weight:600;padding:2px 8px;background:rgba(99,102,241,.15);
+    color:#818cf8;border-radius:100px;border:1px solid rgba(99,102,241,.3)}
+  .tabs{display:flex;gap:6px}
+  .tab{padding:6px 16px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid transparent;
+    cursor:pointer;transition:all .15s;background:transparent;color:#6b7280}
+  .tab.active{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}
+  .main{max-width:880px;margin:0 auto;padding:40px 24px}
+  .hero{text-align:center;margin-bottom:40px}
+  .hero h1{font-size:40px;font-weight:800;letter-spacing:-.04em;
+    background:linear-gradient(135deg,#f9fafb 0%,#6366f1 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px}
+  .hero p{color:#6b7280;font-size:15px;max-width:500px;margin:0 auto;line-height:1.6}
+  .badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:36px}
+  .pill{padding:6px 14px;border-radius:100px;font-size:12px;font-weight:500;
+    background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+    color:#9ca3af;display:flex;align-items:center;gap:6px}
+  .card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);
+    border-radius:16px;padding:28px;margin-bottom:20px}
+  .card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .card-label{font-size:14px;font-weight:600;color:#e5e7eb}
+  .url-count{margin-left:8px;font-size:12px;font-weight:500;color:#6366f1;
+    background:rgba(99,102,241,.1);padding:2px 8px;border-radius:100px}
+  .plan-toggle{display:flex;gap:6px}
+  .plan-btn{padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;
+    border:1px solid transparent;cursor:pointer;transition:all .15s;background:transparent;color:#4b5563}
+  .plan-btn.active-free{background:rgba(255,255,255,.06);color:#e5e7eb;border-color:rgba(255,255,255,.1)}
+  .plan-btn.active-pro{background:rgba(99,102,241,.2);color:#818cf8;border-color:rgba(99,102,241,.4)}
+  textarea{width:100%;height:200px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);
+    border-radius:10px;padding:16px;color:#e5e7eb;font-size:13px;line-height:1.6;
+    font-family:'JetBrains Mono','Fira Code',monospace;resize:vertical;outline:none;transition:border-color .2s}
+  textarea:focus{border-color:rgba(99,102,241,.4)}
+  .submit-row{display:flex;justify-content:space-between;align-items:center;margin-top:16px;gap:12px}
+  .hint{color:#4b5563;font-size:12px;flex:1}
+  .btn-submit{padding:10px 28px;border-radius:10px;font-weight:700;font-size:14px;
+    background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;
+    cursor:pointer;display:flex;align-items:center;gap:8px;transition:all .2s;
+    box-shadow:0 4px 20px rgba(99,102,241,.3);white-space:nowrap}
+  .btn-submit:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(99,102,241,.4)}
+  .btn-submit:disabled{background:#1f2937;color:#4b5563;box-shadow:none;transform:none;cursor:not-allowed}
+  .spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.2);
+    border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+  .status-card{animation:fadeIn .25s ease}
+  .status-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+  .status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .status-title{font-size:16px;font-weight:700;color:#f9fafb;margin-left:10px}
+  .job-meta{color:#4b5563;font-size:12px;margin-top:4px}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}
+  .stat{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+    border-radius:12px;padding:18px 22px;flex:1;min-width:130px}
+  .stat-label{color:#9ca3af;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.07em}
+  .stat-value{color:#f9fafb;font-size:26px;font-weight:700;margin-top:6px}
+  .stat-sub{color:#6b7280;font-size:11px;margin-top:3px}
+  .layers{background:rgba(0,0,0,.2);border-radius:10px;padding:0 16px}
+  .layer{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .layer:last-child{border-bottom:none}
+  .layer-icon{font-size:20px;flex-shrink:0}
+  .layer-info{flex:1}
+  .layer-name{color:#e5e7eb;font-size:14px;font-weight:600}
+  .layer-detail{color:#6b7280;font-size:12px;margin-top:2px}
+  .layer-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:all .3s}
+  .dot-on{background:#10b981;box-shadow:0 0 6px #10b981}
+  .dot-off{background:#374151}
+  .dot-pulse{background:#3b82f6;animation:pulse 1s ease infinite;box-shadow:0 0 6px #3b82f6}
+  .notice{margin-top:16px;padding:12px 16px;border-radius:8px;font-size:13px;line-height:1.5}
+  .notice-ok{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);color:#6ee7b7}
+  .notice-err{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171}
+  .progress-wrap{margin:16px 0 20px;background:rgba(255,255,255,.05);border-radius:100px;height:4px;overflow:hidden}
+  .progress-bar{height:4px;border-radius:100px;background:linear-gradient(90deg,#6366f1,#8b5cf6);
+    transition:width 1.5s ease;animation:glow 2s ease infinite}
+  .history-list{display:flex;flex-direction:column;gap:10px}
+  .history-item{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);
+    border-radius:12px;padding:14px 18px;cursor:pointer;display:flex;align-items:center;gap:14px;transition:all .15s}
+  .history-item:hover{border-color:rgba(99,102,241,.3);background:rgba(99,102,241,.05)}
+  .h-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .h-info{flex:1}
+  .h-title{font-size:13px;color:#e5e7eb;font-weight:600}
+  .h-meta{font-size:11px;color:#4b5563;margin-top:2px}
+  .h-stats{font-size:12px;color:#6b7280;text-align:right}
+  .h-rate{color:#10b981;font-size:12px}
+  .empty{text-align:center;color:#374151;padding:60px 0;font-size:15px}
+  .setup{background:rgba(99,102,241,.05);border:1px solid rgba(99,102,241,.15);border-radius:12px;padding:20px 24px;margin-bottom:20px}
+  .setup h3{font-size:14px;font-weight:700;color:#818cf8;margin-bottom:12px}
+  .setup ol{padding-left:18px;color:#6b7280;font-size:13px;line-height:2}
+  .setup code{background:rgba(99,102,241,.15);color:#a5b4fc;padding:1px 6px;border-radius:4px;font-size:12px}
+  @media(max-width:600px){
+    .hero h1{font-size:28px}
+    .submit-row{flex-direction:column;align-items:stretch}
+    .btn-submit{justify-content:center}
+    .stats{gap:8px}
+    .stat{min-width:100px;padding:14px 16px}
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <span class="logo-name">IndexForce</span>
+    <span class="badge">PRO</span>
+  </div>
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('submit',this)">Submit</button>
+    <button class="tab" onclick="showTab('history',this)">History <span id="hist-count"></span></button>
+    <button class="tab" onclick="showTab('setup',this)">Setup</button>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- SUBMIT TAB -->
+  <div id="tab-submit">
+    <div class="hero">
+      <h1>Force Google to Index Your URLs</h1>
+      <p>4-layer engine fires concurrently — 200+ XML-RPC pings, IndexNow API, RSS injection, and sitemap submission. Real infrastructure, zero fake reports.</p>
+    </div>
+    <div class="badges">
+      <div class="pill">📡 200+ XML-RPC Pings</div>
+      <div class="pill">⚡ IndexNow API</div>
+      <div class="pill">📰 RSS Aggregators</div>
+      <div class="pill">🗺️ Sitemap Submission</div>
+      <div class="pill">✅ 24h Verification</div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-label">
+          URLs to Index
+          <span id="url-count-badge" class="url-count" style="display:none"></span>
+        </div>
+        <div class="plan-toggle">
+          <button class="plan-btn active-free" id="btn-free" onclick="setPlan('free')">Free (50 URLs)</button>
+          <button class="plan-btn" id="btn-pro" onclick="setPlan('pro')">⚡ Pro (5,000 URLs)</button>
+        </div>
+      </div>
+      <textarea id="url-input" placeholder="https://example.com/page-1&#10;https://yourbacklinksite.com/your-link&#10;https://anothersite.com/post&#10;&#10;One URL per line, or comma-separated" oninput="countUrls()"></textarea>
+      <div class="submit-row">
+        <span class="hint">Results verified 24h post-submission via Bing indexation check</span>
+        <button class="btn-submit" id="btn-submit" onclick="submitJob()" disabled>
+          <span id="btn-icon">⚡</span>
+          <span id="btn-label">Start Indexing</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="status-card" class="card status-card" style="display:none">
+      <div class="status-header">
+        <div style="display:flex;align-items:center">
+          <div class="status-dot" id="s-dot"></div>
+          <div>
+            <div class="status-title" id="s-title">Queued</div>
+            <div class="job-meta" id="s-meta"></div>
+          </div>
+        </div>
+        <div id="s-spinner" class="spinner" style="display:none"></div>
+      </div>
+      <div class="progress-wrap" id="s-progress" style="display:none">
+        <div class="progress-bar" id="s-bar" style="width:15%"></div>
+      </div>
+      <div class="stats" id="s-stats" style="display:none">
+        <div class="stat"><div class="stat-label">URLs</div><div class="stat-value" id="sv-urls">—</div></div>
+        <div class="stat"><div class="stat-label">Pings Fired</div><div class="stat-value" id="sv-pings">—</div><div class="stat-sub" id="sv-pings-ok"></div></div>
+        <div class="stat"><div class="stat-label">IndexNow</div><div class="stat-value" id="sv-indexnow">—</div><div class="stat-sub">engines hit</div></div>
+        <div class="stat"><div class="stat-label">Index Rate</div><div class="stat-value" id="sv-rate">—</div><div class="stat-sub">24h verification</div></div>
+      </div>
+      <div class="layers" id="s-layers">
+        <div class="layer"><span class="layer-icon">📡</span>
+          <div class="layer-info"><div class="layer-name">XML-RPC Mass Ping</div><div class="layer-detail" id="l1-detail">Waiting…</div></div>
+          <div class="layer-dot dot-off" id="l1-dot"></div></div>
+        <div class="layer"><span class="layer-icon">⚡</span>
+          <div class="layer-info"><div class="layer-name">IndexNow API</div><div class="layer-detail" id="l2-detail">Waiting…</div></div>
+          <div class="layer-dot dot-off" id="l2-dot"></div></div>
+        <div class="layer"><span class="layer-icon">📰</span>
+          <div class="layer-info"><div class="layer-name">RSS Feed Injection</div><div class="layer-detail" id="l3-detail">Waiting…</div></div>
+          <div class="layer-dot dot-off" id="l3-dot"></div></div>
+        <div class="layer"><span class="layer-icon">🗺️</span>
+          <div class="layer-info"><div class="layer-name">Sitemap Submission</div><div class="layer-detail" id="l4-detail">Waiting…</div></div>
+          <div class="layer-dot dot-off" id="l4-dot"></div></div>
+        <div class="layer" id="l5-row" style="display:none"><span class="layer-icon">✅</span>
+          <div class="layer-info"><div class="layer-name">24h Indexation Verified</div><div class="layer-detail" id="l5-detail"></div></div>
+          <div class="layer-dot dot-on" id="l5-dot"></div></div>
+      </div>
+      <div id="s-notice" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- HISTORY TAB -->
+  <div id="tab-history" style="display:none">
+    <h2 style="font-size:22px;font-weight:700;margin-bottom:24px;letter-spacing:-.02em">Job History</h2>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- SETUP TAB -->
+  <div id="tab-setup" style="display:none">
+    <h2 style="font-size:22px;font-weight:700;margin-bottom:24px;letter-spacing:-.02em">Setup Guide</h2>
+
+    <div class="setup">
+      <h3>1 · Supabase (Database) — 2 min</h3>
+      <ol>
+        <li>Go to <strong>supabase.com</strong> → New Project</li>
+        <li>SQL Editor → paste <code>schema.sql</code> → Run</li>
+        <li>Settings → API → copy <strong>Project URL</strong> + <strong>service_role key</strong></li>
+      </ol>
+    </div>
+
+    <div class="setup">
+      <h3>2 · Upstash Redis (Queue) — 1 min</h3>
+      <ol>
+        <li>Go to <strong>upstash.com</strong> → Create Database → Redis</li>
+        <li>Copy the <strong>rediss:// URL</strong> (used by <code>worker.py</code> on Railway)</li>
+      </ol>
+    </div>
+
+    <div class="setup">
+      <h3>3 · Railway (Worker + API) — 3 min</h3>
+      <ol>
+        <li>Push <code>worker.py</code> to a GitHub repo</li>
+        <li>railway.app → New Project → Deploy from GitHub → select repo</li>
+        <li>Add env vars: <code>UPSTASH_REDIS_URL</code> <code>SUPABASE_URL</code> <code>SUPABASE_SERVICE_KEY</code> <code>INDEXNOW_KEY</code> <code>INDEXNOW_HOST</code></li>
+        <li>Start command: <code>python worker.py</code></li>
+        <li>Settings → Networking → expose port <code>8000</code> → copy your Railway public URL</li>
+        <li>Check logs for: <code>Worker started — listening on queue: indexing_jobs</code></li>
+      </ol>
+    </div>
+
+    <div class="setup">
+      <h3>4 · Deploy index.html (Any static host) — 1 min</h3>
+      <ol>
+        <li>Edit the <code>WORKER_URL</code> constant at the top of the <code>&lt;script&gt;</code> block</li>
+        <li>Set it to your Railway public URL, e.g. <code>https://indexforce.up.railway.app</code></li>
+        <li>Drop <code>index.html</code> on Vercel, Netlify, Cloudflare Pages, or S3 — any static host</li>
+        <li>No build step. No Node. Just upload the file.</li>
+      </ol>
+    </div>
+
+    <div class="setup">
+      <h3>5 · Verify Everything Works</h3>
+      <ol>
+        <li>Go to Submit tab → paste 2-3 URLs → Start Indexing</li>
+        <li>Watch status card: Queued → Processing → Complete</li>
+        <li>Check Railway logs for the 4 layer completions</li>
+        <li>After 24h, verification runs automatically and updates Index Rate</li>
+      </ol>
+    </div>
+
+    <div class="notice notice-ok" style="margin-top:0">
+      💡 <strong>Architecture:</strong> <code>worker.py</code> runs FastAPI + the queue worker in one process on Railway.
+      <code>index.html</code> calls <code>/api/submit</code> and <code>/api/status/{job_id}</code> directly on Railway.
+      No Next.js. No TypeScript. No build pipeline.
+    </div>
+  </div>
+</div>
+
+<script>
+// ── CONFIG — set your Railway URL here ────────────────────────────────────────
+// After deploying worker.py to Railway, paste your public Railway URL below.
+// Example: "https://indexforce-production.up.railway.app"
+// No trailing slash.
+const WORKER_URL = "https://YOUR-RAILWAY-APP.up.railway.app";
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let plan = 'free';
+let jobId = null;
+let pollTimer = null;
+let history = JSON.parse(localStorage.getItem('iforce_jobs') || '[]');
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function showTab(name, el) {
+  ['submit','history','setup'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t === name ? 'block' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  if (name === 'history') renderHistory();
+}
+
+// ── URL counting ──────────────────────────────────────────────────────────────
+function parseUrls(raw) {
+  return raw.split(/[\n,\s]+/).map(u=>u.trim()).filter(u=>{
+    try{new URL(u);return true}catch{return false}
+  });
+}
+
+function countUrls() {
+  const urls = parseUrls(document.getElementById('url-input').value);
+  const badge = document.getElementById('url-count-badge');
+  const btn = document.getElementById('btn-submit');
+  if (urls.length > 0) {
+    badge.textContent = urls.length + ' detected';
+    badge.style.display = 'inline';
+    btn.disabled = false;
+  } else {
+    badge.style.display = 'none';
+    btn.disabled = true;
+  }
+}
+
+// ── Plan toggle ───────────────────────────────────────────────────────────────
+function setPlan(p) {
+  plan = p;
+  document.getElementById('btn-free').className = 'plan-btn' + (p==='free'?' active-free':'');
+  document.getElementById('btn-pro').className  = 'plan-btn' + (p==='pro'?' active-pro':'');
+}
+
+// ── Submit ────────────────────────────────────────────────────────────────────
+async function submitJob() {
+  const raw = document.getElementById('url-input').value.trim();
+  const urls = parseUrls(raw);
+  if (!urls.length) return;
+
+  const btn = document.getElementById('btn-submit');
+  btn.disabled = true;
+  document.getElementById('btn-icon').outerHTML = '<div class="spinner" id="btn-icon"></div>';
+  document.getElementById('btn-label').textContent = 'Submitting…';
+
+  try {
+    const res = await fetch(`${WORKER_URL}/api/submit`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({raw_urls: raw, plan, user_id: 'dashboard'}),
+    });
+    const data = await res.json();
+
+    if (data.job_id) {
+      jobId = data.job_id;
+      const stub = {job_id: jobId, status:'queued', url_count: data.urls_queued, queued_at: new Date().toISOString()};
+      showStatusCard(stub);
+      startPolling(jobId);
+      saveHistory(stub);
+    } else {
+      alert(data.detail || data.error || 'Submission failed — check WORKER_URL and Railway logs');
+    }
+  } catch(e) {
+    alert('Network error: ' + e.message + '\n\nIs WORKER_URL set correctly in index.html?');
+  } finally {
+    btn.disabled = false;
+    document.getElementById('btn-icon').outerHTML = '<span id="btn-icon">⚡</span>';
+    document.getElementById('btn-label').textContent = 'Start Indexing';
+  }
+}
+
+// ── Status card ───────────────────────────────────────────────────────────────
+const STATUS_COLOR = {idle:'#6b7280',queued:'#f59e0b',running:'#3b82f6',complete:'#10b981',failed:'#ef4444'};
+const STATUS_LABEL = {idle:'Idle',queued:'Queued',running:'Processing…',complete:'Complete ✓',failed:'Failed'};
+
+function showStatusCard(job) {
+  const card = document.getElementById('status-card');
+  card.style.display = 'block';
+  card.style.borderColor = (STATUS_COLOR[job.status]||'#374151')+'40';
+
+  const dot = document.getElementById('s-dot');
+  dot.style.background = STATUS_COLOR[job.status];
+  dot.style.boxShadow = `0 0 8px ${STATUS_COLOR[job.status]}`;
+  dot.style.animation = job.status==='running' ? 'pulse 1.2s ease infinite' : 'none';
+  document.getElementById('s-title').textContent = STATUS_LABEL[job.status]||job.status;
+  document.getElementById('s-meta').textContent = 'Job: ' + job.job_id;
+
+  document.getElementById('s-spinner').style.display = (job.status==='queued'||job.status==='running') ? 'block':'none';
+
+  const prog = document.getElementById('s-progress');
+  const bar  = document.getElementById('s-bar');
+  if (job.status==='queued'||job.status==='running') {
+    prog.style.display='block';
+    bar.style.width = job.status==='queued'?'10%':'60%';
+  } else {
+    prog.style.display='none';
+    if (job.status==='complete') bar.style.width='100%';
+  }
+
+  const statsEl = document.getElementById('s-stats');
+  if (job.results) {
+    statsEl.style.display = 'flex';
+    document.getElementById('sv-urls').textContent      = job.url_count?.toLocaleString() || '—';
+    document.getElementById('sv-pings').textContent     = job.results.pings_fired?.toLocaleString() || '—';
+    document.getElementById('sv-pings-ok').textContent  = (job.results.pings_ok?.toLocaleString()||'') + ' successful';
+    document.getElementById('sv-indexnow').textContent  = job.results.indexnow_ok ?? '—';
+    document.getElementById('sv-rate').textContent      = job.results.index_rate || 'Pending…';
+  } else if (job.url_count) {
+    statsEl.style.display='flex';
+    document.getElementById('sv-urls').textContent = job.url_count?.toLocaleString() || '—';
+  } else {
+    statsEl.style.display='none';
+  }
+
+  const done = job.status==='complete';
+  const running = job.status==='running';
+
+  setLayer('l1', done?'on':running?'pulse':'off',
+    job.results ? `${job.results.pings_ok?.toLocaleString()} / ${job.results.pings_fired?.toLocaleString()} pings OK` : 'Firing 200+ endpoints…');
+  setLayer('l2', done?'on':running?'pulse':'off',
+    job.results ? `${job.results.indexnow_ok} search engines hit (Bing, Yandex, Seznam)` : 'Submitting to IndexNow…');
+  setLayer('l3', done?'on':'off', done ? 'Feed submitted to FeedBurner & Feedly aggregators' : 'Waiting…');
+  setLayer('l4', done?'on':'off', done ? 'XML sitemap pinged to Google & Bing' : 'Waiting…');
+
+  const vRow = document.getElementById('l5-row');
+  if (job.results?.verify_result) {
+    vRow.style.display='flex';
+    const vr = job.results.verify_result;
+    document.getElementById('l5-detail').textContent = `${vr.indexed}/${vr.checked} URLs confirmed indexed in Bing`;
+    document.getElementById('sv-rate').textContent = vr.index_rate;
+  }
+
+  const notice = document.getElementById('s-notice');
+  if (done) {
+    notice.style.display='block';
+    notice.className='notice notice-ok';
+    notice.innerHTML='✅ All 4 layers complete. If URLs aren\'t indexed within 72h, re-submit — Google can be slow on low-authority hosts. Verification result updates after 24h.';
+  } else if (job.status==='failed') {
+    notice.style.display='block';
+    notice.className='notice notice-err';
+    notice.innerHTML='⚠️ ' + (job.error||'Job failed — check Railway worker logs');
+  } else {
+    notice.style.display='none';
+  }
+}
+
+function setLayer(id, state, detail) {
+  document.getElementById(id+'-dot').className = 'layer-dot ' + (state==='on'?'dot-on':state==='pulse'?'dot-pulse':'dot-off');
+  document.getElementById(id+'-detail').textContent = detail;
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+function startPolling(id) {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`${WORKER_URL}/api/status/${id}`);
+      if (!res.ok) return;
+      const job = await res.json();
+      showStatusCard(job);
+      saveHistory(job);
+      if (job.status==='complete'||job.status==='failed') clearInterval(pollTimer);
+    } catch {}
+  }, 4000);
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+function saveHistory(job) {
+  history = [job, ...history.filter(h=>h.job_id!==job.job_id)].slice(0,50);
+  localStorage.setItem('iforce_jobs', JSON.stringify(history));
+  const countEl = document.getElementById('hist-count');
+  if (history.length) countEl.textContent = history.length;
+}
+
+function renderHistory() {
+  const el = document.getElementById('history-list');
+  if (!history.length) {
+    el.innerHTML = '<div class="empty">No jobs yet — submit some URLs first.</div>';
+    return;
+  }
+  el.innerHTML = history.map(h => `
+    <div class="history-item" onclick="loadJob('${h.job_id}')">
+      <div class="h-dot" style="background:${STATUS_COLOR[h.status]};box-shadow:0 0 6px ${STATUS_COLOR[h.status]}"></div>
+      <div class="h-info">
+        <div class="h-title">${h.url_count} URLs · ${STATUS_LABEL[h.status]||h.status}</div>
+        <div class="h-meta">${h.job_id} · ${new Date(h.queued_at).toLocaleString()}</div>
+      </div>
+      <div class="h-stats">
+        ${h.results ? `<div>${h.results.pings_ok?.toLocaleString()||0} pings OK</div><div class="h-rate">${h.results.index_rate||''}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function loadJob(id) {
+  const job = history.find(h=>h.job_id===id);
+  if (!job) return;
+  showTab('submit', document.querySelectorAll('.tab')[0]);
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab')[0].classList.add('active');
+  jobId = id;
+  showStatusCard(job);
+  if (job.status==='queued'||job.status==='running') startPolling(id);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+const countEl = document.getElementById('hist-count');
+if (history.length) countEl.textContent = history.length;
+</script>
+</body>
+</html>
