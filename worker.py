@@ -62,6 +62,9 @@ INDEXNOW_HOST       = os.environ.get("INDEXNOW_HOST", "indexer.example.com")
 BING_API_KEY        = os.environ.get("BING_API_KEY", "")
 DISCORD_WEBHOOK     = os.environ.get("DISCORD_WEBHOOK", "")
 GENERIC_WEBHOOK     = os.environ.get("GENERIC_WEBHOOK", "")
+# CDN_WARM_DOMAINS — comma-separated list of Vercel domains to cache-warm after each job
+# e.g. "flexygist.com.ng,www.naijasturf.com.ng,mp3fresh.com.ng"
+CDN_WARM_DOMAINS    = [d.strip() for d in os.environ.get("CDN_WARM_DOMAINS", "flexygist.com.ng").split(",") if d.strip()]
 CONCURRENT_PINGS    = 100
 PING_TIMEOUT_SEC    = 6
 MAX_URLS_FREE       = 100
@@ -707,6 +710,95 @@ async def layer_crawl_amplify(urls: List[str], session: aiohttp.ClientSession, f
     return {'amplify_ok': ok, 'amplify_attempted': len(sample)}
 
 
+async def layer_cdn_cache_warm(urls: List[str], session: aiohttp.ClientSession) -> Dict:
+    """
+    CDN Edge Cache Warming — prime Cloudflare/Vercel edge nodes for every submitted URL
+    and their corresponding short-link paths across all CDN_WARM_DOMAINS.
+
+    Strategy:
+      1. Fetch each destination URL directly — warms the origin cache.
+      2. For each CDN_WARM_DOMAIN, fetch /link-hub and /sitemap.xml — forces
+         Vercel's CDN to cache these pages at the edge closest to Googlebot's crawlers.
+      3. For each submitted URL, if it looks like a short-link path, fetch it on
+         every warm domain so Googlebot gets instant 200/301 with no cold-start.
+
+    All requests use a Googlebot UA so Vercel/Cloudflare caches the bot-facing response.
+    """
+    if not CDN_WARM_DOMAINS:
+        return {"skipped": True, "reason": "No CDN_WARM_DOMAINS configured"}
+
+    GOOGLEBOT_UA = (
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    )
+    warm_headers = {
+        "User-Agent":       GOOGLEBOT_UA,
+        "Accept":           "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Encoding":  "gzip, deflate, br",
+        "Cache-Control":    "no-cache",           # bypass stale edge cache, force fresh fill
+        "X-Forwarded-For":  "66.249.66.1",        # Googlebot IP range hint
+    }
+
+    tasks = []
+    warmed_urls = []
+
+    # 1. Warm /link-hub and /sitemap.xml on every domain — high-value pages Googlebot trusts
+    for domain in CDN_WARM_DOMAINS:
+        for path in ["/link-hub", "/sitemap.xml", "/feed.xml", "/crawl-hub"]:
+            warm_url = f"https://{domain}{path}"
+            tasks.append(session.get(
+                warm_url,
+                headers=warm_headers,
+                timeout=aiohttp.ClientTimeout(total=12),
+                ssl=True,
+                allow_redirects=True,
+            ))
+            warmed_urls.append(warm_url)
+
+    # 2. Warm each submitted URL directly (destination pages)
+    for url in urls[:50]:  # cap at 50 to stay within Railway timeout
+        tasks.append(session.get(
+            url,
+            headers={**warm_headers, "User-Agent": "Mozilla/5.0 (compatible; bingbot/2.0)"},
+            timeout=aiohttp.ClientTimeout(total=10),
+            ssl=True,
+            allow_redirects=True,
+        ))
+        warmed_urls.append(url)
+
+    # 3. For each URL that has a short /link/ path equivalent, warm it on all domains
+    #    Detect: if URL path starts with /link/ on the main domain, prime other domains too
+    link_paths = [urlparse(u).path for u in urls if "/link/" in u]
+    for domain in CDN_WARM_DOMAINS:
+        for path in link_paths[:20]:  # cap cross-domain warm at 20 paths
+            warm_url = f"https://{domain}{path}"
+            tasks.append(session.get(
+                warm_url,
+                headers=warm_headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=True,
+                allow_redirects=True,
+            ))
+            warmed_urls.append(warm_url)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    ok    = sum(1 for r in results if not isinstance(r, Exception) and r.status < 400)
+    total = len(results)
+    for r in results:
+        if not isinstance(r, Exception):
+            try:
+                r.release()
+            except Exception:
+                pass
+
+    log.info("CDN cache warm: %d/%d URLs primed across %d domains", ok, total, len(CDN_WARM_DOMAINS))
+    return {
+        "cdn_warm_ok":      ok,
+        "cdn_warm_fired":   total,
+        "domains_warmed":   CDN_WARM_DOMAINS,
+    }
+
+
 async def send_webhook_notification(job_id: str, result: Dict, session: aiohttp.ClientSession):
     """Send job completion notification to Discord or generic webhook."""
     if not DISCORD_WEBHOOK and not GENERIC_WEBHOOK:
@@ -779,6 +871,7 @@ async def run_full_indexing_job(urls: List[str], job_id: str, plan: str = "free"
             sitemap_ping_result,
             rss_result,
             bing_first_result,
+            cdn_warm_result,
         ) = await asyncio.gather(
             layer_xmlrpc_blast(urls),
             layer_indexnow(urls, session),
@@ -791,6 +884,7 @@ async def run_full_indexing_job(urls: List[str], job_id: str, plan: str = "free"
             layer_sitemap_ping(sitemap_urls, session),
             layer_rss_aggregators(feed_urls, session),
             layer_yandex_bing_first(urls, session),
+            layer_cdn_cache_warm(urls, session),
         )
 
         rss_xml = generate_rss_feed(urls, job_id)
@@ -812,7 +906,7 @@ async def run_full_indexing_job(urls: List[str], job_id: str, plan: str = "free"
                 "sitemap_ping":      sitemap_ping_result,
                 "rss_aggregators":   rss_result,
                 "bing_first":        bing_first_result,
-
+                "cdn_cache_warm":    cdn_warm_result,
             },
             "generated_assets": {"rss_feed": rss_xml, "sitemap": sitemap_xml},
         }
@@ -1144,7 +1238,9 @@ async def health():
             "crawl_amplify":         bool(os.environ.get("PROXY_GATEWAY", "")),
             "wayback_save":          True,
             "discord_webhook":       bool(DISCORD_WEBHOOK),
-            "layers_total":          11,
+            "cdn_cache_warm":        bool(CDN_WARM_DOMAINS),
+            "cdn_warm_domains":      len(CDN_WARM_DOMAINS),
+            "layers_total":          12,
         },
     }
 
